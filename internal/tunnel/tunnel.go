@@ -8,8 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +23,17 @@ import (
 
 // upstreamDialTimeout bounds one inline upstream dial when the pool is empty.
 const upstreamDialTimeout = 15 * time.Second
+
+// maxConcurrentDials bounds how many upstream handshakes may be in flight at
+// once, across the pool warm-ups and the inline dials a pool miss falls back to.
+//
+// Without a bound, a client opening a hundred connections at once turns into a
+// hundred simultaneous dials. Each one binds a source port for as long as it
+// takes to fail, so against an edge that has stopped answering they pile up
+// until the port range is exhausted and the real error - a dead route - is
+// buried under bind collisions. Queueing behind a bounded gate costs a little
+// latency on a burst and keeps the failure legible.
+const maxConcurrentDials = 16
 
 // Stats are the live counters the UI polls.
 type Stats struct {
@@ -97,8 +108,14 @@ func (t *Tunnel) Start() error {
 		return err
 	}
 	t.router = rt
+	// Always stated, not only in the plural: a session that silently had one
+	// route is indistinguishable in the log from one that had eight and never
+	// used them, and that is the first thing to check when a dead edge is
+	// never failed away from.
 	if n := len(rt.all()); n > 1 {
 		t.logf("%d ranked routes available for failover", n)
+	} else {
+		t.logf("only one edge IP is configured: no failover if it stops answering")
 	}
 
 	var engine *spoof.Engine
@@ -151,6 +168,11 @@ func (t *Tunnel) Start() error {
 			return conn, nil
 		}
 	}
+
+	// The gate wraps whichever dialler was chosen, so the pool warm-ups and the
+	// inline dials of a pool miss share one budget rather than each having
+	// their own.
+	dial = gated(dial, maxConcurrentDials)
 
 	ln, err := net.Listen("tcp", t.cfg.Listener.Addr())
 	if err != nil {
@@ -252,18 +274,19 @@ func (t *Tunnel) PoolStats() *pool.Stats {
 	return t.pool.Stats()
 }
 
-// noteRelayError logs relay failures without flooding. A client that retries
-// hard produces the same error dozens of times a second, and one line per
-// attempt buries everything else in the log.
-func (t *Tunnel) noteRelayError(err error) {
-	msg := err.Error()
+// addrPattern matches an "ip:port" anywhere in an error string.
+var addrPattern = regexp.MustCompile(`[0-9]{1,3}(?:\.[0-9]{1,3}){3}:[0-9]+`)
+
+// noteError logs a relay or dial failure without flooding. A client that
+// retries hard produces the same error dozens of times a second, and one line
+// per attempt buries everything else in the log.
+func (t *Tunnel) noteError(err error) {
 	// Strip the addresses so repeats of the same underlying failure collapse
-	// together rather than each looking unique.
-	if i := strings.Index(msg, ": read "); i >= 0 {
-		if j := strings.Index(msg[i:], ": wsarecv"); j >= 0 {
-			msg = msg[:i] + msg[i+j:]
-		}
-	}
+	// together rather than each looking unique. Every connection has its own
+	// local port, so without this one cause produces one distinct-looking line
+	// per connection - which is exactly how a dead edge used to fill the log
+	// with hundreds of dial timeouts that differed only in the source port.
+	msg := addrPattern.ReplaceAllString(err.Error(), "<addr>")
 
 	t.errMu.Lock()
 	same := msg == t.lastErr
@@ -317,7 +340,7 @@ func (t *Tunnel) handle(client net.Conn) {
 	cancel()
 	if err != nil {
 		t.stats.Failed.Add(1)
-		t.logf("upstream dial failed: %v", err)
+		t.noteError(fmt.Errorf("upstream dial failed: %w", err))
 		client.Close()
 		return
 	}
@@ -332,6 +355,22 @@ func (t *Tunnel) handle(client net.Conn) {
 	t.stats.BytesDown.Add(counters.Down.Load())
 
 	if relayErr != nil {
-		t.noteRelayError(relayErr)
+		t.noteError(relayErr)
+	}
+}
+
+// gated wraps dial so at most n calls run at once. A caller that cannot get a
+// slot before its context expires fails the way it would have on a slow dial,
+// which is what the timeout already means to it.
+func gated(dial pool.DialFunc, n int) pool.DialFunc {
+	slots := make(chan struct{}, n)
+	return func(ctx context.Context) (net.Conn, error) {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		defer func() { <-slots }()
+		return dial(ctx)
 	}
 }

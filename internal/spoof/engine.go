@@ -290,7 +290,7 @@ func (e *Engine) register(srcPort uint16, edge netip.Addr) (*flow, error) {
 	e.mu.Lock()
 	if _, exists := e.flows[srcPort]; exists {
 		e.mu.Unlock()
-		return nil, fmt.Errorf("spoof: source port %d is already being tracked", srcPort)
+		return nil, fmt.Errorf("%w: port %d", ErrPortBusy, srcPort)
 	}
 	e.flows[srcPort] = f
 	e.mu.Unlock()
