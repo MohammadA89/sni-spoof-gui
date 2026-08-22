@@ -1,0 +1,15 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "SNI-Spoofing-Advance",
+  "outputfilename": "SNI-Spoofing-Advance",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "info": {
+    "productName": "SNI Spoofing Advance",
+    "productVersion": "1.0.0",
+    "companyName": "SNI Spoofing Advance",
+    "comments": "DPI-evading TCP transport. Based on patterniha/SNI-Spoofing (GPL-3.0)."
+  }
+}
