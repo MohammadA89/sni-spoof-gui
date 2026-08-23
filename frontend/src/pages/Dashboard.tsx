@@ -31,9 +31,13 @@ export default function Dashboard({t, snap, history, busy, error, auto, onToggle
         EventsOn('autoStatus', (s: AutoStatus) => setAutoStatus(s.active ? s : null))
     }, [])
 
+    // In client mode there is no relay listener to point anything at; what the
+    // user needs is the SOCKS inbound their browser or system proxy uses.
+    const primaryAddr = snap.clientMode ? snap.socksAddr : snap.listener
+
     const copyAddr = async () => {
         try {
-            await navigator.clipboard.writeText(snap.listener)
+            await navigator.clipboard.writeText(primaryAddr)
             setCopied(true)
             setTimeout(() => setCopied(false), 1500)
         } catch {
@@ -70,9 +74,16 @@ export default function Dashboard({t, snap, history, busy, error, auto, onToggle
                     <div className="hero-sub">
                         {busy && autoStatus
                             ? `${phase} — ${autoStatus.done}/${autoStatus.total}`
-                            : snap.running
-                                ? <>{t.edge}: <span className="num">{snap.edge}</span></>
-                                : t.pressConnect}
+                            : snap.clientMode
+                                // Which config is selected matters more here than
+                                // the address, and it is what a user checks first
+                                // when something is not working.
+                                ? snap.profile
+                                    ? <>{t.activeProfile}: <span className="num">{snap.profile}</span></>
+                                    : t.noProfileSelected
+                                : snap.running
+                                    ? <>{t.edge}: <span className="num">{snap.edge}</span></>
+                                    : t.pressConnect}
                     </div>
 
                     {busy && autoStatus && (
@@ -90,14 +101,17 @@ export default function Dashboard({t, snap, history, busy, error, auto, onToggle
                 </div>
 
                 <div className="hero-addr">
-                    <div className="card-label">{t.listenerAddr}</div>
+                    <div className="card-label">{snap.clientMode ? t.socksAddr : t.listenerAddr}</div>
                     <div className="addr-value">
-                        <strong className="mono">{snap.listener}</strong>
+                        <strong className="mono">{primaryAddr}</strong>
                         <button className="mini-btn" onClick={copyAddr}>
                             {copied ? t.copied : t.copy}
                         </button>
                     </div>
-                    <div className="hint">{t.listenerHint}</div>
+                    {snap.clientMode && (
+                        <div className="card-sub mono">{t.httpAddr}: {snap.httpAddr}</div>
+                    )}
+                    <div className="hint">{snap.clientMode ? t.clientHint : t.listenerHint}</div>
                 </div>
             </section>
 
@@ -115,13 +129,23 @@ export default function Dashboard({t, snap, history, busy, error, auto, onToggle
                 <div className="card">
                     <div className="card-label">{t.activeConns}</div>
                     <div className="card-value num">{count(snap.active)}</div>
-                    <div className="card-sub">{t.totalAccepted}: {count(snap.accepted)}</div>
+                    <div className="card-sub">
+                        {snap.clientMode ? t.spoofedConns : t.totalAccepted}: {count(snap.accepted)}
+                    </div>
                 </div>
-                <div className="card">
-                    <div className="card-label">{t.poolIdle}</div>
-                    <div className="card-value num">{count(snap.poolIdle)}</div>
-                    <div className="card-sub">{t.failedConns}: {count(snap.failed)}</div>
-                </div>
+                {snap.clientMode ? (
+                    <div className="card">
+                        <div className="card-label">{t.passthru}</div>
+                        <div className="card-value num">{count(snap.passthru)}</div>
+                        <div className="card-sub">{t.failedConns}: {count(snap.failed)}</div>
+                    </div>
+                ) : (
+                    <div className="card">
+                        <div className="card-label">{t.poolIdle}</div>
+                        <div className="card-value num">{count(snap.poolIdle)}</div>
+                        <div className="card-sub">{t.failedConns}: {count(snap.failed)}</div>
+                    </div>
+                )}
             </div>
 
             <div className="panel">
@@ -136,25 +160,51 @@ export default function Dashboard({t, snap, history, busy, error, auto, onToggle
             </div>
 
             <div className="grid c2">
-                <div className="panel">
-                    <div className="panel-head">
-                        <span className="panel-title">{t.poolTitle}</span>
+                {snap.clientMode ? (
+                    // The pool does not run in client mode - a warm connection
+                    // to one server cannot serve a dial to another - so this
+                    // slot shows what the dialer is doing instead.
+                    <div className="panel">
+                        <div className="panel-head">
+                            <span className="panel-title">{t.navConfigs}</span>
+                        </div>
+                        <div className="stat-row">
+                            <div className="stat">
+                                <span className="stat-label">{t.spoofedConns}</span>
+                                <span className="stat-value num">{count(snap.accepted)}</span>
+                            </div>
+                            <div className="stat">
+                                <span className="stat-label">{t.passthru}</span>
+                                <span className="stat-value num">{count(snap.passthru)}</span>
+                            </div>
+                            <div className="stat">
+                                <span className="stat-label">{t.resolveFail}</span>
+                                <span className="stat-value num">{count(snap.resolveFail)}</span>
+                            </div>
+                        </div>
+                        <div className="hint">{t.passthruHint}</div>
                     </div>
-                    <div className="stat-row">
-                        <div className="stat">
-                            <span className="stat-label">{t.poolHits}</span>
-                            <span className="stat-value num">{count(snap.poolHits)}</span>
+                ) : (
+                    <div className="panel">
+                        <div className="panel-head">
+                            <span className="panel-title">{t.poolTitle}</span>
                         </div>
-                        <div className="stat">
-                            <span className="stat-label">{t.poolMisses}</span>
-                            <span className="stat-value num">{count(snap.poolMisses)}</span>
-                        </div>
-                        <div className="stat">
-                            <span className="stat-label">{t.poolDiscarded}</span>
-                            <span className="stat-value num">{count(snap.poolDiscarded)}</span>
+                        <div className="stat-row">
+                            <div className="stat">
+                                <span className="stat-label">{t.poolHits}</span>
+                                <span className="stat-value num">{count(snap.poolHits)}</span>
+                            </div>
+                            <div className="stat">
+                                <span className="stat-label">{t.poolMisses}</span>
+                                <span className="stat-value num">{count(snap.poolMisses)}</span>
+                            </div>
+                            <div className="stat">
+                                <span className="stat-label">{t.poolDiscarded}</span>
+                                <span className="stat-value num">{count(snap.poolDiscarded)}</span>
+                            </div>
                         </div>
                     </div>
-                </div>
+                )}
 
                 <div className="panel">
                     <div className="panel-head">

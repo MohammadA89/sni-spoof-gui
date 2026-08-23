@@ -10,6 +10,8 @@ frontend/node_modules/
 
 # Runtime state
 config.json
+# Holds imported configs, and therefore UUIDs and passwords.
+profiles.json
 *.exe
 *.exe~
 

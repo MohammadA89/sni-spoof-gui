@@ -111,3 +111,63 @@ func TestAnyEdgeSkipsEdgeIPValidation(t *testing.T) {
 		t.Error("a fixed-edge engine must still require an edge IP")
 	}
 }
+
+// AnyPort is what lets one engine serve dials to whatever port a user config
+// names. Both edge-port tests have to disappear: leaving either one behind
+// silently drops one direction of every handshake to any other port, and the
+// symptom is a dial that times out waiting for an injection.
+func TestAnyPortDropsBothEdgePortTests(t *testing.T) {
+	for _, anyEdge := range []bool{false, true} {
+		cfg := testConfig(anyEdge, ModeFast)
+		cfg.AnyPort = true
+		f := cfg.buildFilter()
+
+		if strings.Contains(f, "tcp.DstPort == 443") {
+			t.Errorf("anyEdge=%v: outbound edge-port test survived AnyPort:\n%s", anyEdge, f)
+		}
+		if strings.Contains(f, "tcp.SrcPort == 443") {
+			t.Errorf("anyEdge=%v: inbound edge-port test survived AnyPort:\n%s", anyEdge, f)
+		}
+		// A dangling separator means the expression is malformed, and
+		// WinDivert rejects the whole filter at Open time.
+		for _, bad := range []string{"and )", "( and", "and and", "  "} {
+			if strings.Contains(f, bad) {
+				t.Errorf("anyEdge=%v: malformed filter contains %q:\n%s", anyEdge, bad, f)
+			}
+		}
+	}
+}
+
+// With the port tests gone, the source port range is the only thing left
+// distinguishing our handshakes, so it must still be applied per direction.
+func TestAnyPortKeepsSourceRangePerDirection(t *testing.T) {
+	cfg := testConfig(true, ModeFast)
+	cfg.AnyPort = true
+	f := cfg.buildFilter()
+
+	wantOut := "ip.SrcAddr == 10.0.0.5 and tcp.SrcPort >= 45000 and tcp.SrcPort <= 54999"
+	wantIn := "ip.DstAddr == 10.0.0.5 and tcp.DstPort >= 45000 and tcp.DstPort <= 54999"
+	if !strings.Contains(f, wantOut) {
+		t.Errorf("outbound clause missing\n  filter: %s\n  want:   %s", f, wantOut)
+	}
+	if !strings.Contains(f, wantIn) {
+		t.Errorf("inbound clause missing\n  filter: %s\n  want:   %s", f, wantIn)
+	}
+}
+
+// A fixed edge IP with AnyPort narrows by address instead, and the pair must
+// stay well-formed once the trailing port tests are removed.
+func TestAnyPortSingleEdgeKeepsAddressPair(t *testing.T) {
+	cfg := testConfig(false, ModeFast)
+	cfg.AnyPort = true
+	f := cfg.buildFilter()
+
+	wantOut := "ip.SrcAddr == 10.0.0.5 and ip.DstAddr == 104.17.0.1)"
+	wantIn := "ip.SrcAddr == 104.17.0.1 and ip.DstAddr == 10.0.0.5)"
+	if !strings.Contains(f, wantOut) {
+		t.Errorf("outbound clause missing\n  filter: %s\n  want:   %s", f, wantOut)
+	}
+	if !strings.Contains(f, wantIn) {
+		t.Errorf("inbound clause missing\n  filter: %s\n  want:   %s", f, wantIn)
+	}
+}

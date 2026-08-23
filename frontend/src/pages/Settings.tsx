@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react'
-import type {Config} from '../types'
+import type {Config, SystemProxyState} from '../types'
 import type {Dict} from '../i18n'
 
 interface Props {
@@ -9,9 +9,13 @@ interface Props {
     onReset: () => Promise<Config>
     autostart: boolean
     onAutostart: (on: boolean) => void
+    systemProxy: SystemProxyState
+    onSystemProxy: (on: boolean) => void
 }
 
-export default function Settings({t, config, onSave, onReset, autostart, onAutostart}: Props) {
+export default function Settings({
+    t, config, onSave, onReset, autostart, onAutostart, systemProxy, onSystemProxy,
+}: Props) {
     const [draft, setDraft] = useState<Config | null>(config)
     const [error, setError] = useState('')
     const [ok, setOk] = useState('')
@@ -184,7 +188,61 @@ export default function Settings({t, config, onSave, onReset, autostart, onAutos
             </div>
 
             <div className="panel">
+                <div className="panel-head"><span className="panel-title">{t.settingsClient}</span></div>
+
+                <div className="field">
+                    <label className="check">
+                        <input type="checkbox" checked={draft.client.enabled}
+                               onChange={e => patch(c => { c.client.enabled = e.target.checked })}/>
+                        {t.clientEnabled}
+                    </label>
+                    <div className="field-hint">{t.clientEnabledHint}</div>
+                </div>
+
+                <div className="row">
+                    <div className="field">
+                        <label>{t.socksPort}</label>
+                        <input type="number" className="num" value={draft.client.socks_port}
+                               disabled={!draft.client.enabled}
+                               onChange={e => patch(c => { c.client.socks_port = num(e.target.value) })}/>
+                    </div>
+                    <div className="field">
+                        <label>{t.httpPort}</label>
+                        <input type="number" className="num" value={draft.client.http_port}
+                               disabled={!draft.client.enabled}
+                               onChange={e => patch(c => { c.client.http_port = num(e.target.value) })}/>
+                    </div>
+                </div>
+                <div className="field-hint" style={{marginTop: -8, marginBottom: 14}}>{t.portsHint}</div>
+
+                <div className="field">
+                    <label>{t.doh}</label>
+                    <input type="text" className="mono" dir="ltr" value={draft.client.doh}
+                           disabled={!draft.client.enabled}
+                           onChange={e => patch(c => { c.client.doh = e.target.value })}/>
+                    <div className="field-hint">{t.dohHint}</div>
+                </div>
+            </div>
+
+            <div className="panel">
                 <div className="panel-head"><span className="panel-title">{t.settingsSystem}</span></div>
+
+                <div className="field">
+                    <label className="check">
+                        <input type="checkbox" checked={systemProxy.enabled}
+                               disabled={systemProxy.enabled && !systemProxy.ours}
+                               onChange={e => onSystemProxy(e.target.checked)}/>
+                        {t.systemProxy}
+                    </label>
+                    <div className="field-hint">
+                        {/* A proxy someone else configured is left alone: switching
+                            it off here would silently undo the user's own setting. */}
+                        {systemProxy.enabled && !systemProxy.ours
+                            ? `${t.systemProxyForeign} (${systemProxy.server})`
+                            : t.systemProxyHint}
+                    </div>
+                </div>
+
                 <div className="field">
                     <label className="check">
                         <input type="checkbox" checked={autostart}

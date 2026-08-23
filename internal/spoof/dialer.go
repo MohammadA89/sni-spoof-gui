@@ -28,7 +28,16 @@ const socketBufferSize = 512 * 1024
 // maxPortAttempts bounds how many source ports Dial will try before failing.
 // Explicit binds can collide with a port still in TIME_WAIT or held by another
 // process, and walking a few candidates is cheaper than surfacing the error.
-const maxPortAttempts = 16
+//
+// Under a burst of simultaneous dials the window of ports in flight is wide, so
+// this has to be comfortably larger than the number of dials the tunnel lets
+// run at once, or a burst exhausts the attempts rather than the range.
+const maxPortAttempts = 64
+
+// ErrPortBusy reports that the chosen source port already has a flow behind it.
+// It is a transient collision between two simultaneous dials, not a fault:
+// the next port works, so DialTo retries rather than failing the connection.
+var ErrPortBusy = errors.New("spoof: source port is already being tracked")
 
 // portCursor rotates through the configured range so consecutive dials do not
 // retry the same busy port.
@@ -58,27 +67,42 @@ func (e *Engine) Dial(ctx context.Context) (net.Conn, error) {
 	return e.DialTo(ctx, e.cfg.EdgeIP)
 }
 
-// DialTo is Dial against a specific edge address, for callers that manage more
-// than one - the scanner probing candidates, or failover across a ranked list.
-// The engine must have been built with AnyEdge for addresses other than the
-// configured one to be captured.
+// DialTo is Dial against a specific edge address on the configured edge port,
+// for callers that manage more than one - the scanner probing candidates, or
+// failover across a ranked list. The engine must have been built with AnyEdge
+// for addresses other than the configured one to be captured.
 func (e *Engine) DialTo(ctx context.Context, edge netip.Addr) (net.Conn, error) {
+	return e.DialToPort(ctx, edge, e.cfg.EdgePort)
+}
+
+// DialToPort is DialTo against an arbitrary destination port, for callers whose
+// destination comes from a user config rather than from this package's own
+// configuration. The engine must have been built with AnyPort, or the capture
+// filter will not match a handshake to any port but the configured one and the
+// dial times out waiting for an injection that never happens.
+func (e *Engine) DialToPort(ctx context.Context, edge netip.Addr, port uint16) (net.Conn, error) {
 	if e.handle == nil {
 		return nil, errors.New("spoof: engine is not started")
 	}
 	if !edge.Is4() {
 		return nil, fmt.Errorf("spoof: edge %q is not IPv4", edge)
 	}
+	if port == 0 {
+		return nil, errors.New("spoof: destination port 0 is not dialable")
+	}
+	if port != e.cfg.EdgePort && !e.cfg.AnyPort {
+		return nil, fmt.Errorf("spoof: engine is pinned to port %d; rebuild it with AnyPort to dial %d", e.cfg.EdgePort, port)
+	}
 	var lastErr error
 	for attempt := 0; attempt < maxPortAttempts; attempt++ {
-		conn, err := e.dialOnce(ctx, edge)
+		conn, err := e.dialOnce(ctx, edge, port)
 		if err == nil {
 			return conn, nil
 		}
 		lastErr = err
-		// Only a bind collision is worth another port; anything else will
+		// Only a port collision is worth another port; anything else will
 		// fail the same way on every port.
-		if !isAddrInUse(err) {
+		if !isPortCollision(err) {
 			return nil, err
 		}
 		if ctx.Err() != nil {
@@ -88,10 +112,10 @@ func (e *Engine) DialTo(ctx context.Context, edge netip.Addr) (net.Conn, error) 
 	return nil, fmt.Errorf("spoof: no free source port after %d attempts: %w", maxPortAttempts, lastErr)
 }
 
-func (e *Engine) dialOnce(ctx context.Context, edge netip.Addr) (net.Conn, error) {
+func (e *Engine) dialOnce(ctx context.Context, edge netip.Addr, dstPort uint16) (net.Conn, error) {
 	port := e.ports.take()
 
-	f, err := e.register(port, edge)
+	f, err := e.register(port, edge, dstPort)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +131,7 @@ func (e *Engine) dialOnce(ctx context.Context, edge netip.Addr) (net.Conn, error
 		Control:   controlSocket,
 		KeepAlive: 15 * time.Second,
 	}
-	conn, err := d.DialContext(ctx, "tcp4", net.JoinHostPort(edge.String(), fmt.Sprint(e.cfg.EdgePort)))
+	conn, err := d.DialContext(ctx, "tcp4", net.JoinHostPort(edge.String(), fmt.Sprint(dstPort)))
 	if err != nil {
 		return nil, err
 	}
@@ -177,6 +201,19 @@ func tuneConn(conn net.Conn) {
 	_ = tc.SetNoDelay(true)
 	_ = tc.SetKeepAlive(true)
 	_ = tc.SetKeepAlivePeriod(15 * time.Second)
+}
+
+// isPortCollision reports whether err means "this source port is taken, try
+// another one".
+//
+// Two distinct collisions land here. ErrPortBusy is ours: another in-flight
+// dial holds the same port in the engine flow table. WSAEADDRINUSE is the
+// kernel's, and on Windows it usually arrives from connectex rather than bind -
+// SO_REUSEADDR lets the bind through, and the 4-tuple is only found to be
+// duplicated when the connection to the edge is actually attempted. Both mean
+// the same thing to the caller, and both are cured by the next port.
+func isPortCollision(err error) bool {
+	return errors.Is(err, ErrPortBusy) || isAddrInUse(err)
 }
 
 func isAddrInUse(err error) bool {

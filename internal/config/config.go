@@ -22,6 +22,30 @@ type Config struct {
 	Transport Transport `json:"transport"`
 	Pool      Pool      `json:"pool"`
 	Log       Log       `json:"log"`
+	Client    Client    `json:"client"`
+}
+
+// Client configures the built-in proxy client.
+//
+// With it enabled the app stops being only a transport: an embedded xray-core
+// runs the user's own imported config, and every connection it makes is dialled
+// through the spoofing engine. The comment above about carrying no protocol
+// still describes the other mode, which is kept because pointing an external
+// client at a local listener is a perfectly good way to work and costs nothing
+// to leave in place.
+type Client struct {
+	// Enabled selects the built-in client over the plain relay listener.
+	Enabled bool `json:"enabled"`
+
+	// SocksPort and HTTPPort are the local inbounds a browser or the system
+	// proxy points at. They default to v2rayN's, so an existing browser setting
+	// keeps working unchanged.
+	SocksPort int `json:"socks_port"`
+	HTTPPort  int `json:"http_port"`
+
+	// DoH is the resolver xray uses for names it looks up itself. "off"
+	// leaves it with the local resolver.
+	DoH string `json:"doh"`
 }
 
 // Listener is the local endpoint clients connect to.
@@ -116,6 +140,12 @@ func Default() Config {
 			TTLSeconds: 30,
 		},
 		Log: Log{Level: "info"},
+		Client: Client{
+			Enabled:   true,
+			SocksPort: 10808,
+			HTTPPort:  10809,
+			DoH:       "https://1.1.1.1/dns-query",
+		},
 	}
 }
 
@@ -179,6 +209,27 @@ func (c *Config) Validate() error {
 	if c.Listener.Port >= c.Transport.PortLow && c.Listener.Port <= c.Transport.PortHigh {
 		return fmt.Errorf("config: listener port %d falls inside the source port range %d-%d",
 			c.Listener.Port, c.Transport.PortLow, c.Transport.PortHigh)
+	}
+
+	if c.Client.Enabled {
+		if c.Client.SocksPort <= 0 || c.Client.SocksPort > 65535 {
+			return fmt.Errorf("config: client socks_port %d is out of range", c.Client.SocksPort)
+		}
+		if c.Client.HTTPPort <= 0 || c.Client.HTTPPort > 65535 {
+			return fmt.Errorf("config: client http_port %d is out of range", c.Client.HTTPPort)
+		}
+		if c.Client.SocksPort == c.Client.HTTPPort {
+			return fmt.Errorf("config: client socks_port and http_port cannot both be %d", c.Client.SocksPort)
+		}
+		// Same reasoning as the listener check above: an inbound bound inside
+		// the source port range could have its port stolen by an outgoing
+		// spoofed connection.
+		for name, port := range map[string]int{"socks_port": c.Client.SocksPort, "http_port": c.Client.HTTPPort} {
+			if port >= c.Transport.PortLow && port <= c.Transport.PortHigh {
+				return fmt.Errorf("config: client %s %d falls inside the source port range %d-%d",
+					name, port, c.Transport.PortLow, c.Transport.PortHigh)
+			}
+		}
 	}
 
 	if c.Pool.Enabled {

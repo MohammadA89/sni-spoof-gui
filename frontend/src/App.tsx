@@ -8,20 +8,23 @@ import {
     GetConfig,
     GetLogs,
     GetSnapshot,
+    GetSystemProxy,
+    SetSystemProxy,
     SaveConfig,
     Start,
     Stop,
 } from '../wailsjs/go/main/App'
 
 import {dict, type Lang} from './i18n'
-import {emptySnapshot, type Config, type LogEntry, type Snapshot} from './types'
+import {emptySnapshot, noSystemProxy, type Config, type LogEntry, type Snapshot, type SystemProxyState} from './types'
 import Dashboard from './pages/Dashboard'
+import Configs from './pages/Configs'
 import Settings from './pages/Settings'
 import Scanner from './pages/Scanner'
 import Logs from './pages/Logs'
 import About from './pages/About'
 
-type Page = 'dashboard' | 'settings' | 'scanner' | 'logs' | 'about'
+type Page = 'dashboard' | 'configs' | 'settings' | 'scanner' | 'logs' | 'about'
 type Theme = 'dark' | 'light'
 
 // Roughly a minute of history at the backend's half-second push interval.
@@ -36,6 +39,7 @@ export default function App() {
     const [config, setConfig] = useState<Config | null>(null)
     const [logs, setLogs] = useState<LogEntry[]>([])
     const [autostart, setAutostart] = useState(false)
+    const [systemProxy, setSystemProxy] = useState<SystemProxyState>(noSystemProxy)
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState('')
 
@@ -65,6 +69,7 @@ export default function App() {
         GetConfig().then(c => setConfig(c as Config)).catch(() => {})
         GetLogs().then(l => setLogs(l as LogEntry[])).catch(() => {})
         GetAutostart().then(setAutostart).catch(() => {})
+        GetSystemProxy().then(s => setSystemProxy(s as SystemProxyState)).catch(() => {})
 
         EventsOn('stats', (s: Snapshot) => {
             setSnap(s)
@@ -121,12 +126,38 @@ export default function App() {
         await saveConfig(next)
     }, [config, saveConfig])
 
+    const toggleSystemProxy = useCallback(async (on: boolean) => {
+        try {
+            await SetSystemProxy(on)
+        } catch (e: any) {
+            setError(String(e?.message ?? e))
+        }
+        // Re-read rather than assume: the backend declines to touch a proxy
+        // another program configured, so the toggle must reflect what actually
+        // happened rather than what was asked for.
+        try {
+            setSystemProxy((await GetSystemProxy()) as SystemProxyState)
+        } catch {
+            // Leave the toggle where it was.
+        }
+    }, [])
+
     const toggleAutostart = useCallback(async (on: boolean) => {
         try {
             await SetAutostart(on)
             setAutostart(on)
         } catch {
             // The backend logs the reason; leave the toggle where it was.
+        }
+    }, [])
+
+    // Selecting or removing a config changes what the dashboard reports, and
+    // waiting for the next timed push would leave it stale for half a second.
+    const refreshSnapshot = useCallback(async () => {
+        try {
+            setSnap((await GetSnapshot()) as Snapshot)
+        } catch {
+            // Not worth surfacing: the next pushed snapshot arrives shortly.
         }
     }, [])
 
@@ -137,6 +168,7 @@ export default function App() {
 
     const NAV: Array<[Page, string]> = [
         ['dashboard', t.navDashboard],
+        ['configs', t.navConfigs],
         ['settings', t.navSettings],
         ['scanner', t.navScanner],
         ['logs', t.navLogs],
@@ -177,9 +209,11 @@ export default function App() {
                                auto={config?.transport.auto ?? true}
                                onToggle={toggle} onToggleAuto={toggleAuto}/>
                 )}
+                {page === 'configs' && <Configs t={t} onChanged={refreshSnapshot}/>}
                 {page === 'settings' && (
                     <Settings t={t} config={config} onSave={saveConfig} onReset={resetConfig}
-                              autostart={autostart} onAutostart={toggleAutostart}/>
+                              autostart={autostart} onAutostart={toggleAutostart}
+                              systemProxy={systemProxy} onSystemProxy={toggleSystemProxy}/>
                 )}
                 {page === 'scanner' && <Scanner t={t}/>}
                 {page === 'logs' && <Logs t={t} logs={logs} onClear={clearLogs}/>}

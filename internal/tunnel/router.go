@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sync"
+	"time"
 )
 
 // failuresBeforeSwitch is how many consecutive dial failures on the current
@@ -16,6 +17,18 @@ import (
 // and the alternatives were already verified when they were chosen, so moving
 // is cheap.
 const failuresBeforeSwitch = 3
+
+// rotateSettle is how long a freshly chosen route is left alone before it can
+// be blamed for anything.
+//
+// Failures arrive concurrently: a client opening fifty connections at once
+// against a dead edge produces fifty failures within the same second, all of
+// them started before the first one was reported. Counting each toward the
+// streak would rotate through every alternative in a single burst and land back
+// on the dead one having given none of them a connection to prove itself with.
+// Ignoring failures for a moment after a switch means one burst costs one
+// rotation.
+const rotateSettle = 2 * time.Second
 
 // router holds the ranked edge addresses and decides when to move on.
 //
@@ -29,7 +42,8 @@ type router struct {
 	idx    int
 	fails  int
 	logf   func(string, ...any)
-	rotate int // how many times the route has moved, for stats
+	rotate int       // how many times the route has moved, for stats
+	moved  time.Time // when the route last changed
 }
 
 func newRouter(ips []string, logf func(string, ...any)) (*router, error) {
@@ -74,8 +88,17 @@ func (r *router) failure() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if len(r.edges) == 1 {
+		return false
+	}
+	// A dial that was already in flight when the route moved says nothing
+	// about the route it is being reported against.
+	if !r.moved.IsZero() && time.Since(r.moved) < rotateSettle {
+		return false
+	}
+
 	r.fails++
-	if r.fails < failuresBeforeSwitch || len(r.edges) == 1 {
+	if r.fails < failuresBeforeSwitch {
 		return false
 	}
 
@@ -83,6 +106,7 @@ func (r *router) failure() bool {
 	r.idx = (r.idx + 1) % len(r.edges)
 	r.fails = 0
 	r.rotate++
+	r.moved = time.Now()
 	r.logf("route %s failed %d times in a row, switching to %s", from, failuresBeforeSwitch, r.edges[r.idx])
 	return true
 }
