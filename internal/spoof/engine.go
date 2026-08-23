@@ -60,6 +60,19 @@ type Config struct {
 	// actually dialled, so injection stays per-connection.
 	AnyEdge bool
 
+	// AnyPort drops the EdgePort tests as well, leaving the source port range
+	// as the only thing that distinguishes our handshakes. It is for callers
+	// that dial whatever address and port a user config names rather than one
+	// configured edge, where the destination port is not known up front.
+	//
+	// It is deliberately separate from AnyEdge, because it is the wider of the
+	// two: the bound range overlaps the Windows dynamic port range, so SYNs
+	// belonging to other processes now reach the capture loop. They cost a
+	// user-space round trip each and are then re-injected untouched - dispatch
+	// ignores any port with no flow behind it - but the narrower filter is
+	// worth keeping wherever the destination port is fixed.
+	AnyPort bool
+
 	// OnEvent, if set, receives human-readable engine events for the UI log.
 	OnEvent func(string)
 }
@@ -112,20 +125,34 @@ func (c *Config) validate() error {
 // scratch rather than cloning the handshake ACK, we only ever need to see the
 // two SYN packets.
 func (c *Config) buildFilter() string {
+	// Each direction needs its own port test. The edge port is the destination
+	// on the way out and the source on the way back, so a single shared
+	// "tcp.DstPort == edge" term would silently exclude every SYN-ACK - which
+	// is exactly the packet the injection waits for. Under AnyPort both tests
+	// drop out entirely and the source port range carries the whole filter.
+	outPort, inPort := "", ""
+	if !c.AnyPort {
+		outPort = fmt.Sprintf("tcp.DstPort == %d and ", c.EdgePort)
+		inPort = fmt.Sprintf("tcp.SrcPort == %d and ", c.EdgePort)
+	}
+
 	if c.AnyEdge {
-		// Each direction needs its own port test. The edge port is the
-		// destination on the way out and the source on the way back, so a
-		// single shared "tcp.DstPort == edge" term would silently exclude
-		// every SYN-ACK - which is exactly the packet the injection waits for.
 		return fmt.Sprintf(
-			"tcp and tcp.Syn and ((ip.SrcAddr == %s and tcp.DstPort == %d and tcp.SrcPort >= %d and tcp.SrcPort <= %d) or (ip.DstAddr == %s and tcp.SrcPort == %d and tcp.DstPort >= %d and tcp.DstPort <= %d))",
-			c.InterfaceIP, c.EdgePort, c.PortLow, c.PortHigh,
-			c.InterfaceIP, c.EdgePort, c.PortLow, c.PortHigh,
+			"tcp and tcp.Syn and ((ip.SrcAddr == %s and %stcp.SrcPort >= %d and tcp.SrcPort <= %d) or (ip.DstAddr == %s and %stcp.DstPort >= %d and tcp.DstPort <= %d))",
+			c.InterfaceIP, outPort, c.PortLow, c.PortHigh,
+			c.InterfaceIP, inPort, c.PortLow, c.PortHigh,
 		)
 	}
+	// Trailing terms here, so the separator hangs off the front of the test
+	// rather than the back of the address pair.
+	outPair, inPair := "", ""
+	if !c.AnyPort {
+		outPair = fmt.Sprintf(" and tcp.DstPort == %d", c.EdgePort)
+		inPair = fmt.Sprintf(" and tcp.SrcPort == %d", c.EdgePort)
+	}
 	pair := fmt.Sprintf(
-		"((ip.SrcAddr == %s and ip.DstAddr == %s and tcp.DstPort == %d) or (ip.SrcAddr == %s and ip.DstAddr == %s and tcp.SrcPort == %d))",
-		c.InterfaceIP, c.EdgeIP, c.EdgePort, c.EdgeIP, c.InterfaceIP, c.EdgePort,
+		"((ip.SrcAddr == %s and ip.DstAddr == %s%s) or (ip.SrcAddr == %s and ip.DstAddr == %s%s))",
+		c.InterfaceIP, c.EdgeIP, outPair, c.EdgeIP, c.InterfaceIP, inPair,
 	)
 	if c.Mode == ModeFast {
 		return "tcp and tcp.Syn and " + pair
@@ -142,8 +169,13 @@ func (c *Config) buildFilter() string {
 
 // flow tracks one outgoing connection through its handshake.
 type flow struct {
-	srcPort  uint16
-	edgeIP   netip.Addr
+	srcPort uint16
+	edgeIP  netip.Addr
+	// dstPort is recorded per flow rather than read from the engine config,
+	// because one engine now serves dials to whatever port a user config
+	// names. The injected record has to carry the port this flow actually
+	// dialled, or it lands on a connection the peer has never heard of.
+	dstPort  uint16
 	fakeData []byte
 
 	mu         sync.Mutex
@@ -276,7 +308,7 @@ func (e *Engine) Close() error {
 // register starts tracking the handshake on srcPort. It must be called before
 // the connect() that emits the SYN, otherwise the capture loop sees a SYN with
 // no flow behind it and ignores it.
-func (e *Engine) register(srcPort uint16, edge netip.Addr) (*flow, error) {
+func (e *Engine) register(srcPort uint16, edge netip.Addr, dstPort uint16) (*flow, error) {
 	fake, err := RandomClientHello(e.cfg.FakeSNI)
 	if err != nil {
 		return nil, err
@@ -284,6 +316,7 @@ func (e *Engine) register(srcPort uint16, edge netip.Addr) (*flow, error) {
 	f := &flow{
 		srcPort:  srcPort,
 		edgeIP:   edge,
+		dstPort:  dstPort,
 		fakeData: fake,
 		done:     make(chan struct{}),
 	}
@@ -420,7 +453,7 @@ func (e *Engine) injectAfterDelay(f *flow) {
 		SrcIP:   e.cfg.InterfaceIP,
 		DstIP:   f.edgeIP,
 		SrcPort: f.srcPort,
-		DstPort: e.cfg.EdgePort,
+		DstPort: f.dstPort,
 		// The whole trick: start the record before the acceptable window.
 		Seq:     synSeq + 1 - uint32(len(f.fakeData)),
 		Ack:     synAckSeq + 1,

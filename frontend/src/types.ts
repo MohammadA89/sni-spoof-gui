@@ -25,11 +25,43 @@ export interface Pool {
     ttl_seconds: number
 }
 
+export interface Client {
+    enabled: boolean
+    socks_port: number
+    http_port: number
+    doh: string
+}
+
 export interface Config {
     listener: Listener
     transport: Transport
     pool: Pool
     log: { level: string }
+    client: Client
+}
+
+// One row of the config list. It carries no UUID or password on purpose: this
+// crosses into the webview, where it would end up in a devtools console or a
+// screenshot.
+export interface ProfileView {
+    id: string
+    name: string
+    protocol: string
+    endpoint: string
+    security: string
+    network: string
+    sni: string
+    active: boolean
+    edgeOverride: boolean
+    warnings: string[]
+    usable: boolean
+    problem?: string
+}
+
+export interface ImportResult {
+    added: number
+    existing: number
+    failed: string[]
 }
 
 export interface Snapshot {
@@ -50,6 +82,15 @@ export interface Snapshot {
     spoofFail: number
     edge: string
     listener: string
+
+    clientMode: boolean
+    socksAddr: string
+    httpAddr: string
+    profile: string
+    // Dials the engine could not spoof - UDP and IPv6 - which is the number to
+    // look at when traffic works but feels unprotected.
+    passthru: number
+    resolveFail: number
 }
 
 export interface LogEntry {
@@ -64,4 +105,17 @@ export const emptySnapshot: Snapshot = {
     poolIdle: 0, poolHits: 0, poolMisses: 0, poolDiscarded: 0,
     injected: 0, confirmed: 0, spoofFail: 0,
     edge: '', listener: '',
+    clientMode: true, socksAddr: '', httpAddr: '', profile: '',
+    passthru: 0, resolveFail: 0,
 }
+
+// Whether Windows is currently pointed at a proxy, and whether this app is the
+// one that pointed it. The second half is what decides whether the toggle may
+// safely put the previous setting back.
+export interface SystemProxyState {
+    enabled: boolean
+    server: string
+    ours: boolean
+}
+
+export const noSystemProxy: SystemProxyState = {enabled: false, server: '', ours: false}

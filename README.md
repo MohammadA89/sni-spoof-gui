@@ -8,14 +8,29 @@ A Windows desktop rewrite of [patterniha/SNI-Spoofing](https://github.com/patter
 
 ## What it does
 
-It opens a TCP path that DPI has already waved through, then relays bytes over it untouched.
+It opens TCP paths that DPI has already waved through, and runs your own config over them.
+
+Paste a `vless://` or `trojan://` link into the app and press connect. An embedded xray-core runs it, and every connection xray makes — including the REALITY handshake itself — is dialled through the spoofing engine.
+
+```
+browser ──▶ 127.0.0.1:10808 ──▶ embedded xray ──[spoofed TCP]──▶ your server
+                socks/http        your config                     unchanged
+```
+
+The config is used **verbatim**. There is no address to rewrite and no local relay hop: the spoof is not a destination, it is a property of how connections are made.
+
+**You still need a config.** This is not a VPN and it gives you no exit of its own — it makes an existing config reach a server that DPI would otherwise cut off.
+
+### Relay mode
+
+Turning **Settings → Built-in client** off gives you the older shape instead: a plain local listener that an external client is pointed at, carrying no protocol of its own.
 
 ```
 v2rayN / Xray  ──TCP──▶  127.0.0.1:40443  ──[spoofed TCP]──▶  clean IP:443
    your config              this app                            Cloudflare edge
 ```
 
-**This is not a VPN.** It carries no protocol of its own and gives you no exit to the internet. You point a client that already works at the local listener instead of the real server address and leave the rest of its config alone. Its TLS, its SNI and its proxy protocol all pass through unchanged.
+Here you point a client that already works at the local listener instead of the real server address and leave the rest of its config alone. Its TLS, its SNI and its proxy protocol all pass through unchanged.
 
 ### How the spoofing works
 
@@ -45,24 +60,35 @@ Requirements: Windows 10/11 x64, and **Administrator rights** — WinDivert inst
 
 ## Use
 
-1. Launch the app and press the big button. With **auto mode** on (the default) it finds and verifies a clean IP before connecting.
-2. Point your client at the listener address shown on the dashboard — `127.0.0.1:40443` by default. In v2rayN, replace the config's address and port with those; change nothing else.
-3. Test the config in your client.
+1. Launch the app. It asks for elevation, because WinDivert installs a kernel driver.
+2. Open **Configs** and paste your links — one per line, or the body of a subscription. Pick one.
+3. Press the big button.
+4. Point your browser at `127.0.0.1:10808` (SOCKS) or `127.0.0.1:10809` (HTTP), or turn on **Settings → Set as the Windows proxy** and let it do that for you.
 
-Closing the window does not quit: the app goes to the tray and the tunnel keeps running. Use **Quit** in the tray menu to exit.
+Those are v2rayN's default ports, so an existing browser setting keeps working unchanged.
 
-### Why does one config work and another not?
+Closing the window does not quit: the app goes to the tray and the connection keeps running. Use **Quit** in the tray menu to exit.
 
-This is the most common confusion, and it is not a bug.
+### Which configs work
 
-The app gives you a pipe to **one specific IP**. Your client then sends its own ClientHello with its own SNI. That IP only answers for names it actually fronts:
+`vless://` and `trojan://`, over raw/tcp, ws, grpc, httpupgrade, xhttp and mKCP, with TLS or REALITY.
 
-| Your config | Clean IP | Result |
-|---|---|---|
-| behind Cloudflare | Cloudflare edge | works |
-| behind another CDN, or a direct server | Cloudflare edge | **reset** — the edge does not know that name |
+A few things are rejected at import rather than at connect time, because the xray version embedded here removed them outright and a config relying on one cannot run at all:
 
-A reset here has nothing to do with spoofing. The **Scanner → Config check** tab answers it directly: paste the address or SNI from your config and it tells you whether the current edge serves it, in a couple of seconds, instead of you cycling through configs in v2rayN.
+| In the link | Why it is rejected |
+|---|---|
+| `type=http`, `h2`, `quic` | those transports were removed; the config needs an xhttp link |
+| `security=reality` with ws or httpupgrade | REALITY only works over raw, xhttp and gRPC |
+| `type=kcp` with `seed=` or `headerType=` | mKCP's seed and header disguise were removed |
+| `allowInsecure=1` | removed; it is dropped and the config will fail certificate validation |
+
+`vmess://` and `ss://` are not supported yet.
+
+### Configs behind Cloudflare
+
+If your config's server sits behind Cloudflare, tick **behind Cloudflare** on it. The connection then goes to a scanned clean edge IP while the config's own SNI travels unchanged — which is what the scanner below is for.
+
+Without that tick the config is dialled at its own address, which is what you want for a server that is not fronted.
 
 ---
 

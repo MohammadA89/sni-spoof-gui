@@ -802,3 +802,147 @@ textarea {
     text-align: end;
     flex: none;
 }
+
+/* ---- configs ---- */
+
+.banner.warn {
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+    color: var(--warn);
+}
+
+/* Links are Latin text with meaningful punctuation, so the paste box stays
+   left-to-right even when the interface is mirrored. */
+.paste-box {
+    width: 100%;
+    resize: vertical;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-inset);
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.6;
+    margin-bottom: 10px;
+}
+
+.paste-box:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.fail-list {
+    margin: 10px 0 0;
+    padding-inline-start: 18px;
+    font-size: 12px;
+    color: var(--err);
+}
+
+.cfg-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.cfg {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 13px 15px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg-panel);
+}
+
+.cfg.active {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel));
+}
+
+/* A config that cannot run is dimmed rather than hidden: the user still has to
+   be able to see it, understand why, and delete it. */
+.cfg.broken {
+    opacity: 0.75;
+}
+
+.cfg-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.cfg-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.cfg-meta {
+    font-size: 12px;
+    color: var(--text-faint);
+    word-break: break-all;
+}
+
+.cfg-problem {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--err);
+}
+
+.cfg-warn {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--warn);
+}
+
+.cfg-warn summary {
+    cursor: pointer;
+}
+
+.cfg-warn ul {
+    margin: 6px 0 0;
+    padding-inline-start: 18px;
+}
+
+.cfg-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: none;
+}
+
+.mini-btn.danger {
+    color: var(--err);
+    border-color: color-mix(in srgb, var(--err) 35%, transparent);
+}
+
+.tag.on {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--accent);
+}
+
+.empty {
+    text-align: center;
+    padding: 34px 20px;
+}
+
+.empty-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.json-box {
+    max-height: 380px;
+    overflow: auto;
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    font-size: 12px;
+    line-height: 1.55;
+    margin-bottom: 10px;
+    white-space: pre;
+}

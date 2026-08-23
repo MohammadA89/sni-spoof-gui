@@ -67,20 +67,35 @@ func (e *Engine) Dial(ctx context.Context) (net.Conn, error) {
 	return e.DialTo(ctx, e.cfg.EdgeIP)
 }
 
-// DialTo is Dial against a specific edge address, for callers that manage more
-// than one - the scanner probing candidates, or failover across a ranked list.
-// The engine must have been built with AnyEdge for addresses other than the
-// configured one to be captured.
+// DialTo is Dial against a specific edge address on the configured edge port,
+// for callers that manage more than one - the scanner probing candidates, or
+// failover across a ranked list. The engine must have been built with AnyEdge
+// for addresses other than the configured one to be captured.
 func (e *Engine) DialTo(ctx context.Context, edge netip.Addr) (net.Conn, error) {
+	return e.DialToPort(ctx, edge, e.cfg.EdgePort)
+}
+
+// DialToPort is DialTo against an arbitrary destination port, for callers whose
+// destination comes from a user config rather than from this package's own
+// configuration. The engine must have been built with AnyPort, or the capture
+// filter will not match a handshake to any port but the configured one and the
+// dial times out waiting for an injection that never happens.
+func (e *Engine) DialToPort(ctx context.Context, edge netip.Addr, port uint16) (net.Conn, error) {
 	if e.handle == nil {
 		return nil, errors.New("spoof: engine is not started")
 	}
 	if !edge.Is4() {
 		return nil, fmt.Errorf("spoof: edge %q is not IPv4", edge)
 	}
+	if port == 0 {
+		return nil, errors.New("spoof: destination port 0 is not dialable")
+	}
+	if port != e.cfg.EdgePort && !e.cfg.AnyPort {
+		return nil, fmt.Errorf("spoof: engine is pinned to port %d; rebuild it with AnyPort to dial %d", e.cfg.EdgePort, port)
+	}
 	var lastErr error
 	for attempt := 0; attempt < maxPortAttempts; attempt++ {
-		conn, err := e.dialOnce(ctx, edge)
+		conn, err := e.dialOnce(ctx, edge, port)
 		if err == nil {
 			return conn, nil
 		}
@@ -97,10 +112,10 @@ func (e *Engine) DialTo(ctx context.Context, edge netip.Addr) (net.Conn, error) 
 	return nil, fmt.Errorf("spoof: no free source port after %d attempts: %w", maxPortAttempts, lastErr)
 }
 
-func (e *Engine) dialOnce(ctx context.Context, edge netip.Addr) (net.Conn, error) {
+func (e *Engine) dialOnce(ctx context.Context, edge netip.Addr, dstPort uint16) (net.Conn, error) {
 	port := e.ports.take()
 
-	f, err := e.register(port, edge)
+	f, err := e.register(port, edge, dstPort)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +131,7 @@ func (e *Engine) dialOnce(ctx context.Context, edge netip.Addr) (net.Conn, error
 		Control:   controlSocket,
 		KeepAlive: 15 * time.Second,
 	}
-	conn, err := d.DialContext(ctx, "tcp4", net.JoinHostPort(edge.String(), fmt.Sprint(e.cfg.EdgePort)))
+	conn, err := d.DialContext(ctx, "tcp4", net.JoinHostPort(edge.String(), fmt.Sprint(dstPort)))
 	if err != nil {
 		return nil, err
 	}
