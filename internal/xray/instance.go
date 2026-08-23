@@ -60,9 +60,21 @@ var privateRanges = []string{
 	"fe80::/10",
 }
 
-// InstanceOptions describe the instance to build. Only Profile is required.
+// InstanceOptions describe the instance to build. Profile is required unless
+// Direct is set.
 type InstanceOptions struct {
 	Profile *share.Profile
+
+	// Direct runs with no server at all: traffic goes straight out, but every
+	// connection is still dialled through the spoofing engine, so the fake
+	// ClientHello is injected on the way to the real destination.
+	//
+	// This is the mode for someone who has no config. It defeats DPI that
+	// classifies a connection on its SNI, which is what blocks most sites. It
+	// does nothing about a site that blocks the user's country by address, and
+	// nothing about an address that is blackholed outright - for those there is
+	// no substitute for a server somewhere else.
+	Direct bool
 
 	// Listen, SocksPort and HTTPPort define the local inbounds. Binding
 	// anywhere but a loopback address turns the machine into an open proxy,
@@ -103,11 +115,13 @@ func (o *InstanceOptions) applyDefaults() {
 }
 
 func (o *InstanceOptions) validate() error {
-	if o.Profile == nil {
-		return fmt.Errorf("xray: no profile selected")
-	}
-	if err := o.Profile.Validate(); err != nil {
-		return err
+	if !o.Direct {
+		if o.Profile == nil {
+			return fmt.Errorf("xray: no profile selected")
+		}
+		if err := o.Profile.Validate(); err != nil {
+			return err
+		}
 	}
 	if o.SocksPort == o.HTTPPort {
 		return fmt.Errorf("xray: the socks and http inbounds cannot share port %d", o.SocksPort)
@@ -129,9 +143,20 @@ func BuildConfig(opt InstanceOptions) ([]byte, error) {
 		return nil, err
 	}
 
-	proxy, err := opt.Profile.Outbound(TagProxy)
-	if err != nil {
-		return nil, err
+	// In direct mode the default outbound is freedom rather than a server. It
+	// keeps the "proxy" tag so every routing rule below stays identical: only
+	// where unmatched traffic goes changes.
+	var proxy any = map[string]any{
+		"tag":      TagProxy,
+		"protocol": "freedom",
+		"settings": map[string]any{},
+	}
+	if !opt.Direct {
+		ob, err := opt.Profile.Outbound(TagProxy)
+		if err != nil {
+			return nil, err
+		}
+		proxy = ob
 	}
 
 	cfg := map[string]any{

@@ -208,11 +208,21 @@ func (a *App) Start() error {
 	// waits through - is skipped unless one is selected. loadProfiles takes the
 	// lock itself, so this cannot be folded into the block above.
 	if useClient {
-		store := a.loadProfiles()
 		a.mu.Lock()
-		e, ok := store.ActiveEntry()
+		direct := a.cfg.Client.Direct
 		a.mu.Unlock()
-		auto = auto && ok && e.EdgeOverride
+
+		if direct {
+			// Direct mode has no server to front, so a scanned edge address
+			// would go unused.
+			auto = false
+		} else {
+			store := a.loadProfiles()
+			a.mu.Lock()
+			e, ok := store.ActiveEntry()
+			a.mu.Unlock()
+			auto = auto && ok && e.EdgeOverride
+		}
 	}
 
 	// Route selection happens before the tunnel opens its own WinDivert handle,

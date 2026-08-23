@@ -46,6 +46,16 @@ type Client struct {
 	// DoH is the resolver xray uses for names it looks up itself. "off"
 	// leaves it with the local resolver.
 	DoH string `json:"doh"`
+
+	// Direct runs with no server: traffic goes straight to its real
+	// destination, but every connection is still dialled through the spoofing
+	// engine. It is the mode for someone with no config at all.
+	//
+	// What it can and cannot do is worth being clear about, because the
+	// difference is invisible from inside the app: it defeats DPI that
+	// classifies a connection on its SNI, and it does nothing whatsoever about
+	// a site that blocks this country by address.
+	Direct bool `json:"direct"`
 }
 
 // Listener is the local endpoint clients connect to.

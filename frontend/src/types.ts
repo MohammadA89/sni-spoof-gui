@@ -26,6 +26,7 @@ export interface Pool {
 }
 
 export interface Client {
+    direct: boolean
     enabled: boolean
     socks_port: number
     http_port: number
@@ -119,3 +120,21 @@ export interface SystemProxyState {
 }
 
 export const noSystemProxy: SystemProxyState = {enabled: false, server: '', ours: false}
+
+export interface HealthResult {
+    ok: boolean
+    latencyMs: number
+    exitIp: string
+    error?: string
+}
+
+// The pair is what makes the test worth anything: a proxied request that
+// succeeds proves only that something answered. It is the exit address
+// differing from the direct one that proves traffic went through the server.
+export interface ConnectionTest {
+    proxied: HealthResult
+    direct: HealthResult
+    verdict: string
+    working: boolean
+    profile: string
+}

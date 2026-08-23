@@ -1,6 +1,7 @@
 import {useEffect, useState} from 'react'
 import {EventsOn} from '../../wailsjs/runtime/runtime'
-import type {Snapshot} from '../types'
+import {TestConnection} from '../../wailsjs/go/main/App'
+import type {ConnectionTest, Snapshot} from '../types'
 import type {Dict} from '../i18n'
 import {bytes, count, rate} from '../format'
 import Sparkline from '../components/Sparkline'
@@ -26,6 +27,22 @@ interface Props {
 export default function Dashboard({t, snap, history, busy, error, auto, onToggle, onToggleAuto}: Props) {
     const [copied, setCopied] = useState(false)
     const [autoStatus, setAutoStatus] = useState<AutoStatus | null>(null)
+    const [test, setTest] = useState<ConnectionTest | null>(null)
+    const [testing, setTesting] = useState(false)
+    const [testError, setTestError] = useState('')
+
+    const runTest = async () => {
+        setTesting(true)
+        setTestError('')
+        setTest(null)
+        try {
+            setTest((await TestConnection()) as ConnectionTest)
+        } catch (e: any) {
+            setTestError(String(e?.message ?? e))
+        } finally {
+            setTesting(false)
+        }
+    }
 
     useEffect(() => {
         EventsOn('autoStatus', (s: AutoStatus) => setAutoStatus(s.active ? s : null))
@@ -147,6 +164,45 @@ export default function Dashboard({t, snap, history, busy, error, auto, onToggle
                     </div>
                 )}
             </div>
+
+            {snap.clientMode && (
+                <div className="panel">
+                    <div className="panel-head">
+                        <span className="panel-title">{t.testBtn}</span>
+                        <button className="mini-btn" onClick={runTest} disabled={testing || !snap.running}>
+                            {testing ? t.testing : t.testBtn}
+                        </button>
+                    </div>
+                    <div className="hint">{t.testHint}</div>
+
+                    {testError && <div className="banner err">{t.errorPrefix}: {testError}</div>}
+
+                    {test && (
+                        <>
+                            <div className={`banner ${test.working ? 'ok' : 'err'}`}>{test.verdict}</div>
+                            <div className="stat-row">
+                                <div className="stat">
+                                    <span className="stat-label">{t.testProxied}</span>
+                                    <span className="stat-value num">
+                                        {test.proxied.ok ? `${test.proxied.latencyMs} ms` : '—'}
+                                    </span>
+                                </div>
+                                <div className="stat">
+                                    <span className="stat-label">{t.testExitIP}</span>
+                                    <span className="stat-value num mono">{test.proxied.exitIp || '—'}</span>
+                                </div>
+                                <div className="stat">
+                                    {/* Shown side by side on purpose: the same address
+                                        in both columns means traffic went around the
+                                        proxy, not through it. */}
+                                    <span className="stat-label">{t.testDirect}</span>
+                                    <span className="stat-value num mono">{test.direct.exitIp || '—'}</span>
+                                </div>
+                            </div>
+                        </>
+                    )}
+                </div>
+            )}
 
             <div className="panel">
                 <div className="panel-head">

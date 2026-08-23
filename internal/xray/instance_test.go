@@ -236,3 +236,62 @@ func TestStartRequiresADialer(t *testing.T) {
 		t.Error("Start without a dialer should fail")
 	}
 }
+
+// Direct mode is for someone with no config at all: the default outbound
+// becomes freedom, and every dial still goes through the engine.
+func TestDirectModeNeedsNoProfile(t *testing.T) {
+	blob, err := BuildConfig(InstanceOptions{Direct: true})
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+
+	// It still has to be something xray will run.
+	cfg, err := serial.LoadJSONConfig(bytes.NewReader(blob))
+	if err != nil {
+		t.Fatalf("xray could not load the direct config: %v\n%s", err, blob)
+	}
+	inst, err := xcore.New(cfg)
+	if err != nil {
+		t.Fatalf("xray could not build the direct instance: %v\n%s", err, blob)
+	}
+	inst.Close()
+
+	var m map[string]any
+	if err := json.Unmarshal(blob, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	first := m["outbounds"].([]any)[0].(map[string]any)
+	if first["protocol"] != "freedom" {
+		t.Errorf("default outbound = %v, want freedom", first["protocol"])
+	}
+	// The tag has to stay "proxy" so every routing rule keeps working
+	// unchanged; only where unmatched traffic goes differs.
+	if first["tag"] != TagProxy {
+		t.Errorf("default outbound tag = %v, want %q", first["tag"], TagProxy)
+	}
+}
+
+// Without Direct, a missing profile is still an error rather than a silent
+// fall-through to sending everything straight out unprotected.
+func TestWithoutDirectAProfileIsStillRequired(t *testing.T) {
+	if _, err := BuildConfig(InstanceOptions{}); err == nil {
+		t.Error("a config with no profile and no direct mode must fail")
+	}
+}
+
+// A profile given alongside Direct must not quietly win: the user asked for no
+// server, and getting one anyway would send their traffic somewhere they did
+// not choose.
+func TestDirectModeIgnoresAProfile(t *testing.T) {
+	blob, err := BuildConfig(InstanceOptions{Direct: true, Profile: testProfile(t)})
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(blob, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := m["outbounds"].([]any)[0].(map[string]any)["protocol"]; got != "freedom" {
+		t.Errorf("default outbound = %v, want freedom", got)
+	}
+}

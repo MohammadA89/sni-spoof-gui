@@ -199,6 +199,16 @@ export default function Settings({
                     <div className="field-hint">{t.clientEnabledHint}</div>
                 </div>
 
+                <div className="field">
+                    <label className="check">
+                        <input type="checkbox" checked={draft.client.direct}
+                               disabled={!draft.client.enabled}
+                               onChange={e => patch(c => { c.client.direct = e.target.checked })}/>
+                        {t.directMode}
+                    </label>
+                    <div className="field-hint">{t.directModeHint}</div>
+                </div>
+
                 <div className="row">
                     <div className="field">
                         <label>{t.socksPort}</label>

@@ -12,6 +12,7 @@ import (
 
 	"github.com/patterniha-advance/sni-spoofing-advance/internal/config"
 	"github.com/patterniha-advance/sni-spoofing-advance/internal/netutil"
+	"github.com/patterniha-advance/sni-spoofing-advance/internal/profiles"
 	"github.com/patterniha-advance/sni-spoofing-advance/internal/share"
 	"github.com/patterniha-advance/sni-spoofing-advance/internal/spoof"
 	"github.com/patterniha-advance/sni-spoofing-advance/internal/xray"
@@ -47,16 +48,27 @@ func (c *client) close() {
 
 // startClient brings up the built-in client for the selected config.
 func (a *App) startClient(cfg config.Config) error {
-	store := a.loadProfiles()
-	profile, entry, err := store.ActiveProfile()
-	if err != nil {
-		return err
-	}
-	if err := profile.Validate(); err != nil {
-		return err
-	}
-	for _, w := range profile.Warnings {
-		a.log("note: %s", w)
+	var profile *share.Profile
+	var entry profiles.Entry
+
+	if cfg.Client.Direct {
+		// No server, so nothing to select and nothing to validate. Every dial
+		// still goes through the engine; only the destination changes.
+		a.log("direct mode: no server, spoofing connections to their real destination")
+		a.log("this cannot help with a site that blocks this country by address")
+	} else {
+		store := a.loadProfiles()
+		p, e, err := store.ActiveProfile()
+		if err != nil {
+			return err
+		}
+		if err := p.Validate(); err != nil {
+			return err
+		}
+		for _, w := range p.Warnings {
+			a.log("note: %s", w)
+		}
+		profile, entry = p, e
 	}
 
 	// The interface address has to match the one in the capture filter, or the
@@ -69,10 +81,15 @@ func (a *App) startClient(cfg config.Config) error {
 	// an interface. Every later lookup goes through the dialer installed below.
 	resolver := xray.NewCachingResolver(a.newResolver(cfg), resolveTTL)
 	probe := routeProbe
-	if addr, rerr := resolver.LookupIPv4(context.Background(), profile.Address); rerr == nil {
-		probe = addr
-	} else {
-		a.log("could not resolve %s yet (%v); using the default route to pick an interface", profile.Address, rerr)
+	if profile != nil {
+		// With a server, ask about the route to it: that is the one the
+		// connections will actually take. Direct mode has no single
+		// destination, so the default route stands in.
+		if addr, rerr := resolver.LookupIPv4(context.Background(), profile.Address); rerr == nil {
+			probe = addr
+		} else {
+			a.log("could not resolve %s yet (%v); using the default route to pick an interface", profile.Address, rerr)
+		}
 	}
 
 	iface, err := netutil.DefaultInterfaceIPv4(probe)
@@ -103,7 +120,7 @@ func (a *App) startClient(cfg config.Config) error {
 	}
 
 	var override xray.Override
-	if entry.EdgeOverride {
+	if profile != nil && entry.EdgeOverride {
 		edge, eerr := cfg.Transport.PrimaryEdge()
 		if eerr != nil {
 			engine.Close()
@@ -126,6 +143,7 @@ func (a *App) startClient(cfg config.Config) error {
 
 	inst, err := xray.Start(xray.InstanceOptions{
 		Profile:   profile,
+		Direct:    cfg.Client.Direct,
 		Listen:    cfg.Listener.Host,
 		SocksPort: cfg.Client.SocksPort,
 		HTTPPort:  cfg.Client.HTTPPort,
@@ -142,7 +160,11 @@ func (a *App) startClient(cfg config.Config) error {
 	a.lastAt = time.Time{}
 	a.mu.Unlock()
 
-	a.log("connected using %s", profile.Redacted())
+	if profile != nil {
+		a.log("connected using %s", profile.Redacted())
+	} else {
+		a.log("connected in direct mode")
+	}
 	a.log("socks on %s:%d, http on %s:%d", cfg.Listener.Host, cfg.Client.SocksPort,
 		cfg.Listener.Host, cfg.Client.HTTPPort)
 	return nil
